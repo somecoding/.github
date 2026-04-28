@@ -1,4 +1,4 @@
-name: "Update Changelog"
+name: "Post PR: Update Changelog"
 
 on:
   workflow_call:
