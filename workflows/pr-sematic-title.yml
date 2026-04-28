@@ -1,6 +1,6 @@
 name: "Semantic PRs"
-
-
+on: 
+  workflow_call:
 
 jobs:
   main:
