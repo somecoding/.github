@@ -1,0 +1,107 @@
+name: "PR: Check Dependabot Docker Coverage"
+
+on:
+  workflow_call:
+
+jobs:
+  verify:
+    name: "Validate Dependabot Docker Coverage"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Validate Docker Paths in Dependabot Config"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CONFIG_FILE=".github/dependabot.yml"
+
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "ℹ️ Keine .github/dependabot.yml gefunden. Check wird übersprungen."
+            exit 0
+          fi
+
+          python3 -m pip install --quiet pyyaml
+
+          python3 -c '
+          import os, sys, yaml
+
+          config_file = ".github/dependabot.yml"
+          with open(config_file, "r") as f:
+            try:
+              data = yaml.safe_load(f) or {}
+            except Exception as e:
+              print(f"❌ Fehler beim Parsen von {config_file}: {e}")
+              sys.exit(1)
+
+          updates = data.get("updates", [])
+          docker_dirs = set()
+          compose_dirs = set()
+
+          for entry in updates:
+            eco = entry.get("package-ecosystem")
+            dirs = entry.get("directories") or ([entry.get("directory")] if entry.get("directory") else [])
+            for d in dirs:
+              norm = "/" + d.strip("/") if d.strip("/") else "/"
+              if eco == "docker":
+                docker_dirs.add(norm)
+              elif eco == "docker-compose":
+                compose_dirs.add(norm)
+
+          missing_docker = []
+          missing_compose = []
+
+          for root, dirs, files in os.walk("."):
+            if any(ign in root for ign in [".git", "vendor", "node_modules", ".junie", ".idea"]):
+              continue
+            
+            rel_root = os.path.relpath(root, ".")
+            norm_dir = "/" + rel_root.strip("/") if rel_root != "." else "/"
+
+            for file in files:
+              lower = file.lower()
+              is_dockerfile = (
+                lower == "dockerfile"
+                or lower.startswith("dockerfile.")
+                or lower.startswith("dockerfile-")
+                or lower.startswith("dockerfile_")
+                or lower.endswith(".dockerfile")
+              ) and not lower.endswith(".md") and not lower.endswith(".ignore")
+              
+              is_compose = (
+                lower in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]
+                or (lower.startswith("docker-compose.") and (lower.endswith(".yml") or lower.endswith(".yaml")))
+                or (lower.startswith("compose.") and (lower.endswith(".yml") or lower.endswith(".yaml")))
+              )
+
+              if is_dockerfile:
+                if norm_dir not in docker_dirs:
+                  missing_docker.append((norm_dir, os.path.join(rel_root, file)))
+              elif is_compose:
+                if norm_dir not in compose_dirs:
+                  missing_compose.append((norm_dir, os.path.join(rel_root, file)))
+
+          has_error = False
+
+          if missing_docker:
+            has_error = True
+            print("❌ Fehlende Verzeichnisse für package-ecosystem \"docker\" in .github/dependabot.yml:")
+            for d, f in sorted(set(missing_docker)):
+              print(f"   - Verzeichnis: \"{d}\" (gefunden in: {f})")
+
+          if missing_compose:
+            has_error = True
+            print("❌ Fehlende Verzeichnisse für package-ecosystem \"docker-compose\" in .github/dependabot.yml:")
+            for d, f in sorted(set(missing_compose)):
+              print(f"   - Verzeichnis: \"{d}\" (gefunden in: {f})")
+
+          if has_error:
+            print("\n💡 Bitte füge die oben genannten Verzeichnisse zu .github/dependabot.yml hinzu, um den Check zu bestehen.")
+            sys.exit(1)
+
+          print("✅ Alle Docker- und Compose-Verzeichnisse sind vollständig in dependabot.yml konfiguriert.")
+          '
